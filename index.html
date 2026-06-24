@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anak SD Adventure - Tema Laut & Gunung Jepang</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background: #111;
+            font-family: Arial, sans-serif;
+            color: white;
+        }
+        #gameContainer {
+            position: relative;
+        }
+        canvas {
+            border: 2px solid #fff;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 18px;
+        }
+        #instructions {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #ccc;
+        }
+        #audioToggle {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: #444;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="800" height="450"></canvas>
+        <div id="ui">
+            <div>Skor: <span id="score">0</span></div>
+            <div>Nyawa: <span id="lives">3</span></div>
+            <div id="instructions">
+                Gunakan ← → untuk bergerak, ↑ untuk lompat.<br>
+                Hindari musuh merah, kumpulkan koin kuning!
+            </div>
+        </div>
+        <button id="audioToggle">🔊 Musik: ON</button>
+    </div>
+
+    <script>
+        // ==============================
+        // KONFIGURASI GAME
+        // ==============================
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('score');
+        const livesDisplay = document.getElementById('lives');
+        const audioToggle = document.getElementById('audioToggle');
+
+        // Variabel game
+        let score = 0;
+        let lives = 3;
+        let gameOver = false;
+        let levelComplete = false;
+        let audioEnabled = true;
+
+        // Gravitasi & fisika
+        const gravity = 0.6;
+        const friction = 0.8;
+        const jumpStrength = -12;
+
+        // Karakter pemain (anak SD)
+        const player = {
+            x: 80,
+            y: 300,
+            width: 32,
+            height: 48,
+            speed: 5,
+            velX: 0,
+            velY: 0,
+            jumping: false,
+            grounded: false,
+            facing: 'right',
+            color: '#4A90E2'
+        };
+
+        // Platform / tanah (sekarang jadi pulau-pulau di laut)
+        const platforms = [
+            { x: 0, y: 400, width: 800, height: 50, color: '#8B4513', type: 'ground' }, // tanah dasar
+            { x: 150, y: 320, width: 100, height: 20, color: '#8B4513', type: 'platform' },
+            { x: 350, y: 250, width: 100, height: 20, color: '#8B4513', type: 'platform' },
+            { x: 550, y: 180, width: 100, height: 20, color: '#8B4513', type: 'platform' },
+            { x: 200, y: 200, width: 80, height: 20, color: '#A0522D', type: 'moving', dir: 1, speed: 1, minX: 200, maxX: 400 }
+        ];
+
+        // Koin
+        const coins = [
+            { x: 170, y: 290, width: 16, height: 16, collected: false },
+            { x: 370, y: 220, width: 16, height: 16, collected: false },
+            { x: 570, y: 150, width: 16, height: 16, collected: false },
+            { x: 650, y: 350, width: 16, height: 16, collected: false }
+        ];
+
+        // Musuh (bisa diganti dengan ikan hiu atau monster laut)
+        const enemies = [
+            { x: 300, y: 380, width: 32, height: 32, speed: 2, dir: 1, minX: 250, maxX: 500, color: '#FF0000' },
+            { x: 600, y: 380, width: 32, height: 32, speed: 2, dir: -1, minX: 500, maxX: 750, color: '#FF0000' }
+        ];
+
+        // Bendera finish (bisa diganti dengan mercusuar atau perahu)
+        const flag = {
+            x: 750,
+            y: 320,
+            width: 20,
+            height: 80,
+            color: '#FFD700'
+        };
+
+        // ==============================
+        // LATAR BELAKANG LAUT & GUNUNG JEPANG
+        // ==============================
+
+        // Ombak bergulung (animasi)
+        let waveOffset = 0;
+
+        // Gunung Fuji (posisi statis)
+        const mountains = [
+            { x: 100, y: 150, width: 200, height: 120, color: '#6A5ACD' }, // gunung besar
+            { x: 50, y: 180, width: 120, height: 90, color: '#7B68EE' },   // gunung kecil kiri
+            { x: 300, y: 170, width: 150, height: 100, color: '#6A5ACD' }  // gunung kanan
+        ];
+
+        // Matahari terbit / terbenam
+        const sun = {
+            x: 650,
+            y: 80,
+            radius: 40,
+            color: '#FF4500'
+        };
+
+        // ==============================
+        // AUDIO (OPSIONAL)
+        // ==============================
+
+        const bgMusic = new Audio();
+        bgMusic.loop = true;
+        // bgMusic.src = 'assets/bg-music.mp3';  // Ganti dengan path file Anda
+
+        const soundJump = new Audio();
+        // soundJump.src = 'assets/jump.wav';
+        soundJump.volume = 0.4;
+
+        const soundCoin = new Audio();
+        // soundCoin.src = 'assets/coin.wav';
+        soundCoin.volume = 0.6;
+
+        const soundGameOver = new Audio();
+        // soundGameOver.src = 'assets/game-over.wav';
+
+        const soundWin = new Audio();
+        // soundWin.src = 'assets/win.wav';
+
+        audioToggle.addEventListener('click', () => {
+            audioEnabled = !audioEnabled;
+            audioToggle.textContent = audioEnabled ? '🔊 Musik: ON' : '🔇 Musik: OFF';
+            if (audioEnabled) {
+                bgMusic.play().catch(e => console.log('Autoplay diblokir'));
+            } else {
+                bgMusic.pause();
+            }
+        });
+
+        document.addEventListener('click', () => {
+            if (audioEnabled) {
+                bgMusic.play().catch(e => console.log('Autoplay diblokir'));
+            }
+        }, { once: true });
+
+        // ==============================
+        // KONTROL KEYBOARD
+        // ==============================
+
+        const keys = {};
+        window.addEventListener('keydown', e => {
+            keys[e.key] = true;
+        });
+        window.addEventListener('keyup', e => {
+            keys[e.key] = false;
+        });
+
+        // ==============================
+        // FUNGSI UTAMA
+        // ==============================
+
+        function update() {
+            if (gameOver || levelComplete) return;
+
+            // Animasi ombak
+            waveOffset += 0.02;
+
+            // Gerakan horizontal
+            if (keys['ArrowLeft']) {
+                player.velX = -player.speed;
+                player.facing = 'left';
+            }
+            if (keys['ArrowRight']) {
+                player.velX = player.speed;
+                player.facing = 'right';
+            }
+            if (!keys['ArrowLeft'] && !keys['ArrowRight']) {
+                player.velX *= friction;
+            }
+
+            // Lompat + suara
+            if (keys['ArrowUp'] && player.grounded) {
+                player.velY = jumpStrength;
+                player.jumping = true;
+                player.grounded = false;
+                if (audioEnabled) soundJump.play();
+            }
+
+            // Gravitasi
+            player.velY += gravity;
+
+            // Posisi baru pemain
+            player.x += player.velX;
+            player.y += player.velY;
+
+            // Batas layar
+            if (player.x < 0) player.x = 0;
+            if (player.x + player.width > canvas.width) player.x = canvas.width - player.width;
+
+            // Jatuh dari layar -> kehilangan nyawa
+            if (player.y > canvas.height) {
+                respawnPlayer();
+            }
+
+            // Update platform bergerak
+            platforms.forEach(p => {
+                if (p.type === 'moving') {
+                    p.x += p.speed * p.dir;
+                    if (p.x <= p.minX || p.x >= p.maxX) {
+                        p.dir *= -1;
+                    }
+                }
+            });
+
+            // Update musuh
+            enemies.forEach(e => {
+                e.x += e.speed * e.dir;
+                if (e.x <= e.minX || e.x >= e.maxX) {
+                    e.dir *= -1;
+                }
+            });
+
+            // Deteksi tabrakan dengan platform
+            player.grounded = false;
+            platforms.forEach(platform => {
+                const dir = collisionCheck(player, platform);
+                if (dir === 'left' || dir === 'right') {
+                    player.velX = 0;
+                } else if (dir === 'bottom') {
+                    player.grounded = true;
+                    player.jumping = false;
+                    player.velY = 0;
+                } else if (dir === 'top') {
+                    player.velY = 0;
+                }
+            });
+
+            // Kumpulkan koin + suara
+            coins.forEach(coin => {
+                if (!coin.collected && collisionCheck(player, coin)) {
+                    coin.collected = true;
+                    score += 10;
+                    scoreDisplay.textContent = score;
+                    if (audioEnabled) soundCoin.play();
+                }
+            });
+
+            // Tabrakan dengan musuh
+            enemies.forEach(enemy => {
+                if (collisionCheck(player, enemy)) {
+                    if (player.y + player.height < enemy.y + enemy.height / 2) {
+                        enemy.x = -100;
+                        player.velY = jumpStrength * 0.5;
+                    } else {
+                        respawnPlayer();
+                    }
+                }
+            });
+
+            // Cek finish
+            if (collisionCheck(player, flag)) {
+                levelComplete = true;
+                if (audioEnabled) {
+                    bgMusic.pause();
+                    soundWin.play();
+                }
+            }
+
+            // Gambar ulang
+            draw();
+        }
+
+        function respawnPlayer() {
+            lives--;
+            livesDisplay.textContent = lives;
+            if (lives <= 0) {
+                gameOver = true;
+                if (audioEnabled) {
+                    bgMusic.pause();
+                    soundGameOver.play();
+                }
+            } else {
+                player.x = 80;
+                player.y = 300;
+                player.velX = 0;
+                player.velY = 0;
+            }
+        }
+
+        function collisionCheck(obj1, obj2) {
+            const vX = (obj1.x + obj1.width / 2) - (obj2.x + obj2.width / 2);
+            const vY = (obj1.y + obj1.height / 2) - (obj2.y + obj2.height / 2);
+            const hWidths = (obj1.width + obj2.width) / 2;
+            const hHeights = (obj1.height + obj2.height) / 2;
+
+            if (Math.abs(vX) < hWidths && Math.abs(vY) < hHeights) {
+                const oX = hWidths - Math.abs(vX);
+                const oY = hHeights - Math.abs(vY);
+                if (oX >= oY) {
+                    if (vY > 0) {
+                        return 'top';
+                    } else {
+                        return 'bottom';
+                    }
+                } else {
+                    if (vX > 0) {
+                        return 'left';
+                    } else {
+                        return 'right';
+                    }
+                }
+            }
+            return false;
+        }
+
+        function drawBackground() {
+            // Langit gradasi (senja)
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height / 2);
+            gradient.addColorStop(0, '#FF8C00');
+            gradient.addColorStop(0.5, '#FFD700');
+            gradient.addColorStop(1, '#87CEEB');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height / 2);
+
+            // Laut biru tua
+            ctx.fillStyle = '#1E90FF';
+            ctx.fillRect(0, canvas.height / 2, canvas.width, canvas.height / 2);
+
+            // Gambar matahari
+            ctx.fillStyle = sun.color;
+            ctx.beginPath();
+            ctx.arc(sun.x, sun.y, sun.radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Gambar gunung (seperti Fuji)
+            mountains.forEach(m => {
+                ctx.fillStyle = m.color;
+                ctx.beginPath();
+                ctx.moveTo(m.x, m.y + m.height);
+                ctx.lineTo(m.x + m.width / 2, m.y);
+                ctx.lineTo(m.x + m.width, m.y + m.height);
+                ctx.closePath();
+                ctx.fill();
+            });
+
+            // Gambar ombak bergulung (Hokusai-style)
+            ctx.strokeStyle = '#000080';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            for (let x = 0; x < canvas.width; x += 10) {
+                const y = canvas.height / 2 + Math.sin(x * 0.05 + waveOffset) * 8;
+                if (x === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+            ctx.stroke();
+
+            // Ombak kedua (lebih kecil)
+            ctx.strokeStyle = '#4169E1';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            for (let x = 0; x < canvas.width; x += 8) {
+                const y = canvas.height / 2 + 15 + Math.sin(x * 0.03 - waveOffset * 1.5) * 5;
+                if (x === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+            ctx.stroke();
+        }
+
+        function draw() {
+            // Gambar background dulu
+            drawBackground();
+
+            // Gambar platform (pulau-pulau)
+            platforms.forEach(p => {
+                ctx.fillStyle = p.color;
+                ctx.fillRect(p.x, p.y, p.width, p.height);
+            });
+
+            // Gambar koin
+            coins.forEach(coin => {
+                if (!coin.collected) {
+                    ctx.fillStyle = '#FFD700';
+                    ctx.beginPath();
+                    ctx.arc(coin.x + coin.width / 2, coin.y + coin.height / 2, coin.width / 2, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            });
+
+            // Gambar musuh
+            enemies.forEach(enemy => {
+                if (enemy.x > 0) {
+                    ctx.fillStyle = enemy.color;
+                    ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+                }
+            });
+
+            // Gambar bendera finish
+            ctx.fillStyle = flag.color;
+            ctx.fillRect(flag.x, flag.y, flag.width, flag.height);
+
+            // Gambar pemain (anak SD)
+            ctx.fillStyle = player.color;
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+
+            // Mata sederhana
+            ctx.fillStyle = '#000';
+            if (player.facing === 'right') {
+                ctx.fillRect(player.x + player.width - 10, player.y + 10, 4, 4);
+            } else {
+                ctx.fillRect(player.x + 6, player.y + 10, 4, 4);
+            }
+
+            // Game over / level complete message
+            if (gameOver) {
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#fff';
+                ctx.font = '36px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2);
+                ctx.font = '18px Arial';
+                ctx.fillText('Skor akhir: ' + score, canvas.width / 2, canvas.height / 2 + 40);
+            } else if (levelComplete) {
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#fff';
+                ctx.font = '36px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('LEVEL SELESAI!', canvas.width / 2, canvas.height / 2);
+                ctx.font = '18px Arial';
+                ctx.fillText('Skor: ' + score, canvas.width / 2, canvas.height / 2 + 40);
+            }
+        }
+
+        // Game loop
+        function gameLoop() {
+            update();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Mulai game
+        gameLoop();
+    </script>
+</body>
+</html>
